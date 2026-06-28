@@ -170,7 +170,7 @@ def predict(city: str = "KL", hours: int = 24):
     xgb     = xgb_models[city]
 
     # Generate future timestamps
-    now = pd.Timestamp.now().floor("h")
+    now = pd.Timestamp.now(tz="UTC").floor("h")
     future_timestamps = pd.date_range(start=now, periods=hours, freq="h")
 
     # Prophet forecast
