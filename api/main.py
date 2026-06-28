@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -15,6 +17,12 @@ app = FastAPI(
     description="Hourly temperature forecasts for 5 Malaysian cities.",
     version="1.0.0",
 )
+
+app.mount("/static", StaticFiles(directory="api/static"), name="static")
+
+@app.get("/")
+def root():
+    return FileResponse("api/static/index.html")
 
 MODELS_PATH = Path(os.getenv("MODELS_PATH", "/app/models"))
 CITIES = ["KL", "Kemaman", "Penang", "JB", "KK"]

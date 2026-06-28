@@ -17,8 +17,4 @@ venv/
 # Reports (generated files)
 reports/
 
-# Models (committed selectively)
-models/*.pkl
-models/*.joblib
-
 data/

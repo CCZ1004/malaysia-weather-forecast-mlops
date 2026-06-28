@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Malaysia Weather Forecast</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1e293b;
+      padding: 1.5rem 2rem;
+      border-bottom: 1px solid #334155;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+
+    header span {
+      font-size: 0.85rem;
+      color: #64748b;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    select, button {
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+
+    button {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+
+    button:hover { background: #2563eb; }
+    button:disabled { background: #334155; border-color: #334155; cursor: not-allowed; }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 1.2rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 1.2rem;
+      text-align: center;
+    }
+
+    .stat .value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #3b82f6;
+    }
+
+    .stat .label {
+      font-size: 0.8rem;
+      color: #64748b;
+      margin-top: 0.3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .status {
+      font-size: 0.9rem;
+      color: #64748b;
+      margin-bottom: 1rem;
+      min-height: 1.2rem;
+    }
+
+    .status.error { color: #f87171; }
+
+    canvas { width: 100% !important; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🌦 Malaysia Weather Forecast</h1>
+    <span>Hourly temperature forecast — Prophet + XGBoost ensemble</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="controls">
+    <select id="citySelect">
+      <option value="KL">Kuala Lumpur</option>
+      <option value="Kemaman">Kemaman</option>
+      <option value="Penang">Penang</option>
+      <option value="JB">Johor Bahru</option>
+      <option value="KK">Kota Kinabalu</option>
+    </select>
+    <select id="hoursSelect">
+      <option value="24">Next 24 hours</option>
+      <option value="48">Next 48 hours</option>
+      <option value="72">Next 72 hours</option>
+      <option value="168">Next 7 days</option>
+    </select>
+    <button id="forecastBtn" onclick="fetchForecast()">Get Forecast</button>
+  </div>
+
+  <p class="status" id="status"></p>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="value" id="statMin">--</div>
+      <div class="label">Min °C</div>
+    </div>
+    <div class="stat">
+      <div class="value" id="statMax">--</div>
+      <div class="label">Max °C</div>
+    </div>
+    <div class="stat">
+      <div class="value" id="statAvg">--</div>
+      <div class="label">Avg °C</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Temperature Forecast</h2>
+    <canvas id="forecastChart"></canvas>
+  </div>
+
+</div>
+
+<script>
+  let chart = null;
+
+  async function fetchForecast() {
+    const city  = document.getElementById('citySelect').value;
+    const hours = document.getElementById('hoursSelect').value;
+    const btn   = document.getElementById('forecastBtn');
+    const status = document.getElementById('status');
+
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    status.textContent = 'Fetching forecast...';
+    status.className = 'status';
+
+    try {
+      const res = await fetch(`/predict?city=${city}&hours=${hours}`);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const data = await res.json();
+
+      const labels = data.predictions.map(p => {
+        const d = new Date(p.timestamp);
+        return d.toLocaleString('en-MY', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      });
+      const temps = data.predictions.map(p => p.temperature_c);
+
+      // Stats
+      document.getElementById('statMin').textContent = Math.min(...temps).toFixed(1);
+      document.getElementById('statMax').textContent = Math.max(...temps).toFixed(1);
+      document.getElementById('statAvg').textContent = (temps.reduce((a, b) => a + b) / temps.length).toFixed(1);
+
+      // Chart
+      if (chart) chart.destroy();
+      const ctx = document.getElementById('forecastChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: `${city} Temperature (°C)`,
+            data: temps,
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            borderWidth: 2,
+            pointRadius: hours <= 48 ? 3 : 1,
+            fill: true,
+            tension: 0.4,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { labels: { color: '#94a3b8' } },
+            tooltip: {
+              callbacks: {
+                label: ctx => ` ${ctx.parsed.y.toFixed(1)}°C`
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#64748b', maxRotation: 45, maxTicksLimit: 12 },
+              grid: { color: '#1e293b' }
+            },
+            y: {
+              ticks: { color: '#64748b', callback: v => `${v}°C` },
+              grid: { color: '#334155' }
+            }
+          }
+        }
+      });
+
+      status.textContent = `Forecast generated at ${new Date(data.generated_at).toLocaleString('en-MY')}`;
+
+    } catch (err) {
+      status.textContent = `Error: ${err.message}`;
+      status.className = 'status error';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Get Forecast';
+    }
+  }
+
+  // Load KL forecast on page load
+  fetchForecast();
+</script>
+
+</body>
+</html>
