@@ -1,0 +1,24 @@
+# GCP credentials — never commit
+credentials/
+
+# MLflow
+mlruns/
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Reports (generated files)
+reports/
+
+# Models (committed selectively)
+models/*.pkl
+models/*.joblib
+
+data/

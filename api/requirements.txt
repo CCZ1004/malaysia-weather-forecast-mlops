@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+joblib
+numpy
+pandas
+prophet
+xgboost
+scikit-learn
+python-dotenv
+google-cloud-bigquery
+db-dtypes
+httpx
