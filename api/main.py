@@ -57,7 +57,7 @@ def fetch_recent_actuals(city: str, hours: int = 168) -> pd.DataFrame:
             LIMIT {hours}
         """
         df = client.query(query).to_dataframe()
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         df = df.sort_values("timestamp").reset_index(drop=True)
         return df
     except Exception as e:
@@ -95,8 +95,8 @@ def compute_xgb_features(future_timestamps: pd.DatetimeIndex, recent_df: pd.Data
         # Rolling features from recent actuals
         if not recent_df.empty:
             past = recent_df[recent_df["timestamp"] < ts]
-            row["temp_rolling_mean_6h"]   = past.tail(6)["temperature_2m"].mean() if len(past) >= 6 else np.nan
-            row["temp_rolling_std_6h"]    = past.tail(6)["temperature_2m"].std()  if len(past) >= 6 else np.nan
+            row["temp_rolling_mean_6h"]   = past.tail(6)["temperature_2m"].mean()  if len(past) >= 6  else np.nan
+            row["temp_rolling_std_6h"]    = past.tail(6)["temperature_2m"].std()   if len(past) >= 6  else np.nan
             row["temp_rolling_mean_24h"]  = past.tail(24)["temperature_2m"].mean() if len(past) >= 24 else np.nan
             row["precip_rolling_sum_24h"] = past.tail(24)["precipitation"].sum()   if len(past) >= 24 else np.nan
         else:
@@ -169,12 +169,12 @@ def predict(city: str = "KL", hours: int = 24):
     prophet = prophet_models[city]
     xgb     = xgb_models[city]
 
-    # Generate future timestamps
+    # Generate future timestamps (timezone-aware UTC)
     now = pd.Timestamp.now(tz="UTC").floor("h")
-    future_timestamps = pd.date_range(start=now, periods=hours, freq="h")
+    future_timestamps = pd.date_range(start=now, periods=hours, freq="h", tz="UTC")
 
-    # Prophet forecast
-    future_df = pd.DataFrame({"ds": future_timestamps})
+    # Prophet forecast (timezone-naive)
+    future_df = pd.DataFrame({"ds": future_timestamps.tz_localize(None)})
     forecast = prophet.predict(future_df)
     prophet_pred = forecast["yhat"].values
 
