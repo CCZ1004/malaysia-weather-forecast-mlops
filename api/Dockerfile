@@ -7,8 +7,8 @@ COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy models and api code
-COPY models/ models/
-COPY api/ api/
+COPY models/ /app/models/
+COPY api/ /app/api/
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

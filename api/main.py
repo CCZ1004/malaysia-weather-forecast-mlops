@@ -16,7 +16,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-MODELS_PATH = Path(__file__).resolve().parents[1] / "models"
+MODELS_PATH = Path(os.getenv("MODELS_PATH", "/app/models"))
 CITIES = ["KL", "Kemaman", "Penang", "JB", "KK"]
 
 # Load all models at startup
