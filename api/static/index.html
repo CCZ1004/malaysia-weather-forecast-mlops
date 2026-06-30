@@ -36,7 +36,7 @@
     }
 
     .container {
-      max-width: 900px;
+      max-width: 1000px;
       margin: 2rem auto;
       padding: 0 1.5rem;
     }
@@ -85,33 +85,81 @@
       letter-spacing: 0.05em;
     }
 
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1rem;
-      margin-bottom: 1.5rem;
+    /* Current conditions hero card */
+    .current {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1.5rem;
     }
 
-    .stat {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 10px;
-      padding: 1.2rem;
+    .current-main {
+      display: flex;
+      align-items: center;
+      gap: 1.2rem;
+    }
+
+    .current-icon { font-size: 4rem; line-height: 1; }
+
+    .current-temp {
+      font-size: 3rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+
+    .current-condition {
+      font-size: 1rem;
+      color: #94a3b8;
+      margin-top: 0.2rem;
+    }
+
+    .current-stats {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .current-stat {
       text-align: center;
     }
 
-    .stat .value {
-      font-size: 2rem;
-      font-weight: 700;
+    .current-stat .value {
+      font-size: 1.4rem;
+      font-weight: 600;
       color: #3b82f6;
     }
 
-    .stat .label {
-      font-size: 0.8rem;
+    .current-stat .label {
+      font-size: 0.75rem;
       color: #64748b;
-      margin-top: 0.3rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      margin-top: 0.2rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: transparent;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab.active {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: #fff;
     }
 
     .status {
@@ -124,6 +172,28 @@
     .status.error { color: #f87171; }
 
     canvas { width: 100% !important; }
+
+    .hourly-strip {
+      display: flex;
+      gap: 0.8rem;
+      overflow-x: auto;
+      padding-bottom: 0.5rem;
+    }
+
+    .hour-card {
+      flex: 0 0 auto;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.8rem 1rem;
+      text-align: center;
+      min-width: 80px;
+    }
+
+    .hour-card .time { font-size: 0.75rem; color: #64748b; }
+    .hour-card .icon { font-size: 1.5rem; margin: 0.4rem 0; }
+    .hour-card .temp { font-size: 1.1rem; font-weight: 600; color: #f8fafc; }
+    .hour-card .precip { font-size: 0.7rem; color: #38bdf8; margin-top: 0.2rem; }
   </style>
 </head>
 <body>
@@ -131,7 +201,7 @@
 <header>
   <div>
     <h1>🌦 Malaysia Weather Forecast</h1>
-    <span>Hourly temperature forecast — Prophet + XGBoost ensemble</span>
+    <span>Multi-variable forecast — Prophet + XGBoost ensemble</span>
   </div>
 </header>
 
@@ -156,23 +226,49 @@
 
   <p class="status" id="status"></p>
 
-  <div class="stats">
-    <div class="stat">
-      <div class="value" id="statMin">--</div>
-      <div class="label">Min °C</div>
-    </div>
-    <div class="stat">
-      <div class="value" id="statMax">--</div>
-      <div class="label">Max °C</div>
-    </div>
-    <div class="stat">
-      <div class="value" id="statAvg">--</div>
-      <div class="label">Avg °C</div>
+  <!-- Current conditions hero -->
+  <div class="card">
+    <h2>Current Conditions</h2>
+    <div class="current">
+      <div class="current-main">
+        <div class="current-icon" id="curIcon">--</div>
+        <div>
+          <div class="current-temp" id="curTemp">--°C</div>
+          <div class="current-condition" id="curCondition">--</div>
+        </div>
+      </div>
+      <div class="current-stats">
+        <div class="current-stat">
+          <div class="value" id="curPrecip">--</div>
+          <div class="label">Rain (mm)</div>
+        </div>
+        <div class="current-stat">
+          <div class="value" id="curHumidity">--</div>
+          <div class="label">Humidity (%)</div>
+        </div>
+        <div class="current-stat">
+          <div class="value" id="curWind">--</div>
+          <div class="label">Wind (km/h)</div>
+        </div>
+      </div>
     </div>
   </div>
 
+  <!-- Hourly strip -->
   <div class="card">
-    <h2>Temperature Forecast</h2>
+    <h2>Hourly Forecast</h2>
+    <div class="hourly-strip" id="hourlyStrip"></div>
+  </div>
+
+  <!-- Chart with variable tabs -->
+  <div class="card">
+    <h2>Forecast Chart</h2>
+    <div class="tabs">
+      <button class="tab active" data-var="temperature">Temperature</button>
+      <button class="tab" data-var="precipitation">Precipitation</button>
+      <button class="tab" data-var="humidity">Humidity</button>
+      <button class="tab" data-var="windspeed">Wind Speed</button>
+    </div>
     <canvas id="forecastChart"></canvas>
   </div>
 
@@ -180,6 +276,24 @@
 
 <script>
   let chart = null;
+  let currentData = null;
+  let activeVariable = "temperature";
+
+  const VARIABLE_CONFIG = {
+    temperature:   { key: "temperature_c",   label: "Temperature (°C)", color: "#3b82f6", unit: "°C" },
+    precipitation: { key: "precipitation_mm", label: "Precipitation (mm)", color: "#38bdf8", unit: "mm" },
+    humidity:      { key: "humidity_pct",    label: "Humidity (%)", color: "#a78bfa", unit: "%" },
+    windspeed:     { key: "windspeed_kmh",   label: "Wind Speed (km/h)", color: "#34d399", unit: "km/h" },
+  };
+
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      activeVariable = tab.dataset.var;
+      if (currentData) renderChart(currentData);
+    });
+  });
 
   async function fetchForecast() {
     const city  = document.getElementById('citySelect').value;
@@ -196,58 +310,11 @@
       const res = await fetch(`/predict?city=${city}&hours=${hours}`);
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       const data = await res.json();
+      currentData = data;
 
-      const labels = data.predictions.map(p => {
-        const d = new Date(p.timestamp);
-        return d.toLocaleString('en-MY', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      });
-      const temps = data.predictions.map(p => p.temperature_c);
-
-      // Stats
-      document.getElementById('statMin').textContent = Math.min(...temps).toFixed(1);
-      document.getElementById('statMax').textContent = Math.max(...temps).toFixed(1);
-      document.getElementById('statAvg').textContent = (temps.reduce((a, b) => a + b) / temps.length).toFixed(1);
-
-      // Chart
-      if (chart) chart.destroy();
-      const ctx = document.getElementById('forecastChart').getContext('2d');
-      chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [{
-            label: `${city} Temperature (°C)`,
-            data: temps,
-            borderColor: '#3b82f6',
-            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-            borderWidth: 2,
-            pointRadius: hours <= 48 ? 3 : 1,
-            fill: true,
-            tension: 0.4,
-          }]
-        },
-        options: {
-          responsive: true,
-          plugins: {
-            legend: { labels: { color: '#94a3b8' } },
-            tooltip: {
-              callbacks: {
-                label: ctx => ` ${ctx.parsed.y.toFixed(1)}°C`
-              }
-            }
-          },
-          scales: {
-            x: {
-              ticks: { color: '#64748b', maxRotation: 45, maxTicksLimit: 12 },
-              grid: { color: '#1e293b' }
-            },
-            y: {
-              ticks: { color: '#64748b', callback: v => `${v}°C` },
-              grid: { color: '#334155' }
-            }
-          }
-        }
-      });
+      renderCurrentConditions(data.predictions[0], city);
+      renderHourlyStrip(data.predictions);
+      renderChart(data);
 
       status.textContent = `Forecast generated at ${new Date(data.generated_at).toLocaleString('en-MY')}`;
 
@@ -258,6 +325,84 @@
       btn.disabled = false;
       btn.textContent = 'Get Forecast';
     }
+  }
+
+  function renderCurrentConditions(point, city) {
+    document.getElementById('curIcon').textContent = point.condition_icon;
+    document.getElementById('curTemp').textContent = `${point.temperature_c}°C`;
+    document.getElementById('curCondition').textContent = `${point.condition} — ${city}`;
+    document.getElementById('curPrecip').textContent = point.precipitation_mm;
+    document.getElementById('curHumidity').textContent = point.humidity_pct;
+    document.getElementById('curWind').textContent = point.windspeed_kmh;
+  }
+
+  function renderHourlyStrip(predictions) {
+    const strip = document.getElementById('hourlyStrip');
+    strip.innerHTML = '';
+
+    predictions.slice(0, 24).forEach(p => {
+      const d = new Date(p.timestamp);
+      const time = d.toLocaleString('en-MY', { hour: '2-digit', minute: '2-digit' });
+
+      const card = document.createElement('div');
+      card.className = 'hour-card';
+      card.innerHTML = `
+        <div class="time">${time}</div>
+        <div class="icon">${p.condition_icon}</div>
+        <div class="temp">${p.temperature_c}°</div>
+        <div class="precip">${p.precipitation_mm > 0 ? p.precipitation_mm + 'mm' : ''}</div>
+      `;
+      strip.appendChild(card);
+    });
+  }
+
+  function renderChart(data) {
+    const config = VARIABLE_CONFIG[activeVariable];
+    const labels = data.predictions.map(p => {
+      const d = new Date(p.timestamp);
+      return d.toLocaleString('en-MY', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const values = data.predictions.map(p => p[config.key]);
+
+    if (chart) chart.destroy();
+    const ctx = document.getElementById('forecastChart').getContext('2d');
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: `${data.city} ${config.label}`,
+          data: values,
+          borderColor: config.color,
+          backgroundColor: config.color + '1a',
+          borderWidth: 2,
+          pointRadius: data.forecast_horizon_hours <= 48 ? 3 : 1,
+          fill: true,
+          tension: 0.4,
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: '#94a3b8' } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.parsed.y.toFixed(1)}${config.unit}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#64748b', maxRotation: 45, maxTicksLimit: 12 },
+            grid: { color: '#1e293b' }
+          },
+          y: {
+            ticks: { color: '#64748b', callback: v => `${v}${config.unit}` },
+            grid: { color: '#334155' }
+          }
+        }
+      }
+    });
   }
 
   // Load KL forecast on page load
