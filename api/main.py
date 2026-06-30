@@ -58,15 +58,12 @@ def load_models():
 
 
 def fetch_recent_actuals(city: str, hours: int = 168) -> pd.DataFrame:
-    """
-    Fetch recent actuals directly from Open-Meteo (live, no BigQuery dependency).
-    Always fresh — no scheduled ingestion job required.
-    """
     try:
         past_days = min(8, max(2, (hours // 24) + 2))
         records = fetch_recent(city, past_days=past_days)
         df = pd.DataFrame(records)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        # Open-Meteo already returns timestamps in Asia/Kuala_Lumpur local time
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("Asia/Kuala_Lumpur")
         df = df.sort_values("timestamp").reset_index(drop=True)
         return df
     except Exception as e:
@@ -164,9 +161,9 @@ def get_condition(precipitation: float, humidity: float) -> tuple[str, str]:
         return "Rainy", "🌧"
     elif precipitation > 0.1:
         return "Light Rain", "🌦"
-    elif humidity > 85:
+    elif humidity > 92:
         return "Cloudy", "☁️"
-    elif humidity > 65:
+    elif humidity > 80:
         return "Partly Cloudy", "⛅"
     else:
         return "Sunny", "☀️"
@@ -223,10 +220,10 @@ def predict(city: str = "KL", hours: int = 24):
     if city not in prophet_models["temperature"]:
         raise HTTPException(status_code=503, detail=f"Models for {city} not loaded.")
 
-    now = pd.Timestamp.now(tz="UTC").floor("h")
-    future_timestamps = pd.date_range(start=now, periods=hours, freq="h", tz="UTC")
+    # Generate future timestamps in Malaysia local time (matches Open-Meteo + training data)
+    now = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").floor("h")
+    future_timestamps = pd.date_range(start=now, periods=hours, freq="h", tz="Asia/Kuala_Lumpur")
 
-    # Live fetch from Open-Meteo — always fresh, no scheduled job needed
     recent_df = fetch_recent_actuals(city, hours=168)
 
     results = {}
