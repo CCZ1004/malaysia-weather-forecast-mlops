@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 import mlflow
-import mlflow.sklearn
 from pathlib import Path
 from dotenv import load_dotenv
 from prophet import Prophet
@@ -20,10 +19,18 @@ MODELS_PATH.mkdir(exist_ok=True)
 
 CITIES = ["KL", "Kemaman", "Penang", "JB", "KK"]
 
-# Time-based split — no random shuffle to avoid leakage
-TRAIN_END = "2023-12-31"
-VAL_END   = "2024-06-30"
-# Test: 2024-07-01 to 2024-12-31
+# Map target variable -> (column name, lag/rolling feature prefix)
+TARGETS = {
+    "temperature": "temperature_2m",
+    "precipitation": "precipitation",
+    "humidity": "humidity",
+    "windspeed": "windspeed_10m",
+}
+
+# Time-based split — extended through 2025
+TRAIN_END = "2024-12-31"
+VAL_END   = "2025-06-30"
+# Test: 2025-07-01 onward
 
 
 def load_data(city: str) -> pd.DataFrame:
@@ -40,11 +47,10 @@ def split_data(df: pd.DataFrame):
     return train, val, test
 
 
-def train_prophet(train: pd.DataFrame) -> Prophet:
-    prophet_df = train[["timestamp", "temperature_2m"]].rename(
-        columns={"timestamp": "ds", "temperature_2m": "y"}
+def train_prophet(train: pd.DataFrame, target_col: str) -> Prophet:
+    prophet_df = train[["timestamp", target_col]].rename(
+        columns={"timestamp": "ds", target_col: "y"}
     )
-    # Remove timezone info — Prophet doesn't support tz-aware timestamps
     prophet_df["ds"] = prophet_df["ds"].dt.tz_localize(None)
 
     model = Prophet(
@@ -57,6 +63,7 @@ def train_prophet(train: pd.DataFrame) -> Prophet:
     model.fit(prophet_df)
     return model
 
+
 def get_prophet_predictions(model: Prophet, df: pd.DataFrame) -> np.ndarray:
     future = df[["timestamp"]].rename(columns={"timestamp": "ds"})
     future["ds"] = future["ds"].dt.tz_localize(None)
@@ -64,50 +71,51 @@ def get_prophet_predictions(model: Prophet, df: pd.DataFrame) -> np.ndarray:
     return forecast["yhat"].values
 
 
-def get_xgb_features(df: pd.DataFrame) -> pd.DataFrame:
-    feature_cols = [
-        "temp_lag_1h", "temp_lag_3h", "temp_lag_6h",
-        "temp_lag_24h", "temp_lag_168h",
-        "temp_rolling_mean_6h", "temp_rolling_std_6h",
-        "temp_rolling_mean_24h", "precip_rolling_sum_24h",
-        "hour_sin", "hour_cos", "month_sin", "month_cos",
-    ]
-    return df[feature_cols]
+def get_xgb_feature_columns(target_var: str) -> list[str]:
+    """Build the feature column list for a given target variable."""
+    cols = []
+    for lag in [1, 3, 6, 24, 168]:
+        cols.append(f"{target_var}_lag_{lag}h")
+    cols.append(f"{target_var}_rolling_mean_6h")
+    cols.append(f"{target_var}_rolling_std_6h")
+    cols.append(f"{target_var}_rolling_mean_24h")
+    if target_var == "precipitation":
+        cols.append("precipitation_rolling_sum_24h")
+    cols += ["hour_sin", "hour_cos", "month_sin", "month_cos"]
+    return cols
 
 
 def evaluate(actual: np.ndarray, predicted: np.ndarray) -> dict:
     mae  = mean_absolute_error(actual, predicted)
     rmse = np.sqrt(mean_squared_error(actual, predicted))
-    mape = np.mean(np.abs((actual - predicted) / actual)) * 100
+    # Avoid divide-by-zero for variables that can be 0 (e.g. precipitation)
+    nonzero_mask = actual != 0
+    if nonzero_mask.sum() > 0:
+        mape = np.mean(np.abs((actual[nonzero_mask] - predicted[nonzero_mask]) / actual[nonzero_mask])) * 100
+    else:
+        mape = float("nan")
     return {"mae": round(mae, 4), "rmse": round(rmse, 4), "mape": round(mape, 4)}
 
 
-def train_city(city: str):
-    print(f"\n{'='*50}")
-    print(f"Training models for {city}")
-    print(f"{'='*50}")
+def train_city_variable(city: str, variable_name: str, target_col: str, df: pd.DataFrame):
+    print(f"\n--- {city} / {variable_name} ---")
 
-    df = load_data(city)
     train, val, test = split_data(df)
+    print(f"Train: {len(train)} | Val: {len(val)} | Test: {len(test)}")
 
-    print(f"Train: {len(train)} rows | Val: {len(val)} rows | Test: {len(test)} rows")
-
-    with mlflow.start_run(run_name=f"{city}_ensemble"):
-        # --- Step 1: Train Prophet baseline ---
-        print("Training Prophet...")
-        prophet_model = train_prophet(train)
-
-        # Get Prophet predictions on train + val for residual calculation
+    with mlflow.start_run(run_name=f"{city}_{variable_name}_ensemble"):
+        # Step 1: Prophet baseline
+        prophet_model = train_prophet(train, target_col)
         train_prophet_pred = get_prophet_predictions(prophet_model, train)
         val_prophet_pred   = get_prophet_predictions(prophet_model, val)
 
-        # --- Step 2: Compute residuals ---
-        train_residuals = train["temperature_2m"].values - train_prophet_pred
+        # Step 2: Residuals
+        train_residuals = train[target_col].values - train_prophet_pred
 
-        # --- Step 3: Train XGBoost on residuals ---
-        print("Training XGBoost on residuals...")
-        X_train = get_xgb_features(train)
-        X_val   = get_xgb_features(val)
+        # Step 3: XGBoost on residuals
+        feature_cols = get_xgb_feature_columns(target_col)
+        X_train = train[feature_cols]
+        X_val   = val[feature_cols]
 
         xgb_model = XGBRegressor(
             n_estimators=200,
@@ -119,72 +127,71 @@ def train_city(city: str):
         )
         xgb_model.fit(
             X_train, train_residuals,
-            eval_set=[(X_val, val["temperature_2m"].values - val_prophet_pred)],
+            eval_set=[(X_val, val[target_col].values - val_prophet_pred)],
             verbose=False,
         )
 
-        # --- Step 4: Ensemble predictions ---
+        # Step 4: Ensemble
         val_xgb_residual = xgb_model.predict(X_val)
         val_ensemble_pred = val_prophet_pred + val_xgb_residual
 
-        # --- Step 5: Evaluate ---
-        prophet_metrics  = evaluate(val["temperature_2m"].values, val_prophet_pred)
-        ensemble_metrics = evaluate(val["temperature_2m"].values, val_ensemble_pred)
+        # Clip predictions to physically valid ranges
+        if variable_name == "precipitation":
+            val_ensemble_pred = np.clip(val_ensemble_pred, 0, None)
+        elif variable_name == "humidity":
+            val_ensemble_pred = np.clip(val_ensemble_pred, 0, 100)
+        elif variable_name == "windspeed":
+            val_ensemble_pred = np.clip(val_ensemble_pred, 0, None)
 
-        print(f"Prophet  — MAE: {prophet_metrics['mae']} | RMSE: {prophet_metrics['rmse']} | MAPE: {prophet_metrics['mape']}%")
-        print(f"Ensemble — MAE: {ensemble_metrics['mae']} | RMSE: {ensemble_metrics['rmse']} | MAPE: {ensemble_metrics['mape']}%")
+        # Step 5: Evaluate
+        prophet_metrics  = evaluate(val[target_col].values, val_prophet_pred)
+        ensemble_metrics = evaluate(val[target_col].values, val_ensemble_pred)
 
-        # --- Step 6: Log to MLflow ---
+        print(f"Prophet  — MAE: {prophet_metrics['mae']} | RMSE: {prophet_metrics['rmse']}")
+        print(f"Ensemble — MAE: {ensemble_metrics['mae']} | RMSE: {ensemble_metrics['rmse']}")
+
+        # Step 6: Log to MLflow
         mlflow.log_params({
             "city": city,
+            "variable": variable_name,
             "train_end": TRAIN_END,
             "val_end": VAL_END,
-            "prophet_changepoint_prior": 0.05,
-            "prophet_seasonality_mode": "multiplicative",
-            "xgb_n_estimators": 200,
-            "xgb_max_depth": 4,
-            "xgb_learning_rate": 0.05,
         })
-
         mlflow.log_metrics({
-            f"prophet_mae":   prophet_metrics["mae"],
-            f"prophet_rmse":  prophet_metrics["rmse"],
-            f"ensemble_mae":  ensemble_metrics["mae"],
-            f"ensemble_rmse": ensemble_metrics["rmse"],
-            f"ensemble_mape": ensemble_metrics["mape"],
+            "prophet_mae":  prophet_metrics["mae"],
+            "prophet_rmse": prophet_metrics["rmse"],
+            "ensemble_mae":  ensemble_metrics["mae"],
+            "ensemble_rmse": ensemble_metrics["rmse"],
         })
 
-        # --- Step 7: Save models ---
-        prophet_path = MODELS_PATH / f"prophet_{city}.joblib"
-        xgb_path     = MODELS_PATH / f"xgb_{city}.joblib"
-
+        # Step 7: Save models
+        prophet_path = MODELS_PATH / f"prophet_{variable_name}_{city}.joblib"
+        xgb_path     = MODELS_PATH / f"xgb_{variable_name}_{city}.joblib"
         joblib.dump(prophet_model, prophet_path)
         joblib.dump(xgb_model, xgb_path)
-
         mlflow.log_artifact(str(prophet_path))
         mlflow.log_artifact(str(xgb_path))
-
-        print(f"Models saved to {MODELS_PATH}")
 
     return ensemble_metrics
 
 
 def train_all():
-    mlflow.set_experiment("malaysia-weather-forecast")
+    mlflow.set_experiment("malaysia-weather-forecast-multivariable")
 
-    all_metrics = {}
+    summary = {}
     for city in CITIES:
-        metrics = train_city(city)
-        all_metrics[city] = metrics
+        df = load_data(city)
+        summary[city] = {}
+        for variable_name, target_col in TARGETS.items():
+            metrics = train_city_variable(city, variable_name, target_col, df)
+            summary[city][variable_name] = metrics
 
-    print(f"\n{'='*50}")
-    print("SUMMARY — Validation MAE per city")
-    print(f"{'='*50}")
-    for city, m in all_metrics.items():
-        print(f"{city:12s} MAE: {m['mae']} | RMSE: {m['rmse']} | MAPE: {m['mape']}%")
-
-    avg_mae = np.mean([m["mae"] for m in all_metrics.values()])
-    print(f"\nAverage MAE across all cities: {avg_mae:.4f}")
+    print(f"\n{'='*60}")
+    print("SUMMARY — Validation MAE per city / variable")
+    print(f"{'='*60}")
+    for city, vars_metrics in summary.items():
+        for variable_name, m in vars_metrics.items():
+            print(f"{city:10s} {variable_name:14s} MAE: {m['mae']:.4f}")
 
 
 if __name__ == "__main__":

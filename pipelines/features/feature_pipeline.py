@@ -13,6 +13,8 @@ RAW_DATASET = os.getenv("BQ_DATASET_RAW")
 FEATURE_DATASET = os.getenv("BQ_DATASET_FEATURES")
 TABLE = "hourly"
 
+TARGET_VARS = ["temperature_2m", "precipitation", "humidity", "windspeed_10m"]
+
 
 def fetch_raw(client: bigquery.Client, city: str) -> pd.DataFrame:
     query = f"""
@@ -36,15 +38,18 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    # --- Lag features ---
-    for lag in [1, 3, 6, 24, 168]:
-        df[f"temp_lag_{lag}h"] = df["temperature_2m"].shift(lag)
+    # --- Lag features for all target variables ---
+    for var in TARGET_VARS:
+        for lag in [1, 3, 6, 24, 168]:
+            df[f"{var}_lag_{lag}h"] = df[var].shift(lag)
 
-    # --- Rolling features ---
-    df["temp_rolling_mean_6h"]   = df["temperature_2m"].rolling(6).mean()
-    df["temp_rolling_std_6h"]    = df["temperature_2m"].rolling(6).std()
-    df["temp_rolling_mean_24h"]  = df["temperature_2m"].rolling(24).mean()
-    df["precip_rolling_sum_24h"] = df["precipitation"].rolling(24).sum()
+    # --- Rolling features for all target variables ---
+    for var in TARGET_VARS:
+        df[f"{var}_rolling_mean_6h"]  = df[var].rolling(6).mean()
+        df[f"{var}_rolling_std_6h"]   = df[var].rolling(6).std()
+        df[f"{var}_rolling_mean_24h"] = df[var].rolling(24).mean()
+
+    df["precipitation_rolling_sum_24h"] = df["precipitation"].rolling(24).sum()
 
     # --- Cyclical encoding ---
     df["hour_sin"]  = np.sin(2 * np.pi * df["timestamp"].dt.hour / 24)
@@ -52,7 +57,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["month_sin"] = np.sin(2 * np.pi * df["timestamp"].dt.month / 12)
     df["month_cos"] = np.cos(2 * np.pi * df["timestamp"].dt.month / 12)
 
-    # --- Drop rows with NaN from lag/rolling ---
+    # Drop cloud_cover — not part of feature schema
+    df = df.drop(columns=["cloud_cover"])
+
     df = df.dropna()
 
     return df
@@ -62,23 +69,26 @@ def create_feature_table(client: bigquery.Client):
     table_id = f"{PROJECT_ID}.{FEATURE_DATASET}.{TABLE}"
 
     schema = [
-        bigquery.SchemaField("city",                    "STRING",    mode="REQUIRED"),
-        bigquery.SchemaField("timestamp",               "TIMESTAMP", mode="REQUIRED"),
-        bigquery.SchemaField("temperature_2m",          "FLOAT64"),
-        bigquery.SchemaField("temp_lag_1h",             "FLOAT64"),
-        bigquery.SchemaField("temp_lag_3h",             "FLOAT64"),
-        bigquery.SchemaField("temp_lag_6h",             "FLOAT64"),
-        bigquery.SchemaField("temp_lag_24h",            "FLOAT64"),
-        bigquery.SchemaField("temp_lag_168h",           "FLOAT64"),
-        bigquery.SchemaField("temp_rolling_mean_6h",    "FLOAT64"),
-        bigquery.SchemaField("temp_rolling_std_6h",     "FLOAT64"),
-        bigquery.SchemaField("temp_rolling_mean_24h",   "FLOAT64"),
-        bigquery.SchemaField("precip_rolling_sum_24h",  "FLOAT64"),
-        bigquery.SchemaField("hour_sin",                "FLOAT64"),
-        bigquery.SchemaField("hour_cos",                "FLOAT64"),
-        bigquery.SchemaField("month_sin",               "FLOAT64"),
-        bigquery.SchemaField("month_cos",               "FLOAT64"),
+        bigquery.SchemaField("city",      "STRING",    mode="REQUIRED"),
+        bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED"),
+        bigquery.SchemaField("temperature_2m", "FLOAT64"),
+        bigquery.SchemaField("precipitation",  "FLOAT64"),
+        bigquery.SchemaField("humidity",       "FLOAT64"),
+        bigquery.SchemaField("windspeed_10m",  "FLOAT64"),
     ]
+
+    for var in TARGET_VARS:
+        for lag in [1, 3, 6, 24, 168]:
+            schema.append(bigquery.SchemaField(f"{var}_lag_{lag}h", "FLOAT64"))
+        schema.append(bigquery.SchemaField(f"{var}_rolling_mean_6h",  "FLOAT64"))
+        schema.append(bigquery.SchemaField(f"{var}_rolling_std_6h",   "FLOAT64"))
+        schema.append(bigquery.SchemaField(f"{var}_rolling_mean_24h", "FLOAT64"))
+
+    schema.append(bigquery.SchemaField("precipitation_rolling_sum_24h", "FLOAT64"))
+    schema.append(bigquery.SchemaField("hour_sin",  "FLOAT64"))
+    schema.append(bigquery.SchemaField("hour_cos",  "FLOAT64"))
+    schema.append(bigquery.SchemaField("month_sin", "FLOAT64"))
+    schema.append(bigquery.SchemaField("month_cos", "FLOAT64"))
 
     table = bigquery.Table(table_id, schema=schema)
     table.time_partitioning = bigquery.TimePartitioning(
@@ -94,17 +104,9 @@ def create_feature_table(client: bigquery.Client):
 def insert_features(client: bigquery.Client, df: pd.DataFrame):
     table_id = f"{PROJECT_ID}.{FEATURE_DATASET}.{TABLE}"
 
-    # Convert timestamps to string for BigQuery JSON insert
+    df = df.copy()
     df["timestamp"] = df["timestamp"].astype(str)
-
-    records = df[[
-        "city", "timestamp", "temperature_2m",
-        "temp_lag_1h", "temp_lag_3h", "temp_lag_6h",
-        "temp_lag_24h", "temp_lag_168h",
-        "temp_rolling_mean_6h", "temp_rolling_std_6h",
-        "temp_rolling_mean_24h", "precip_rolling_sum_24h",
-        "hour_sin", "hour_cos", "month_sin", "month_cos",
-    ]].to_dict(orient="records")
+    records = df.to_dict(orient="records")
 
     batch_size = 500
     total = len(records)
