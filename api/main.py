@@ -1,4 +1,5 @@
 import os
+import sys
 import joblib
 import numpy as np
 import pandas as pd
@@ -9,24 +10,24 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from google.cloud import bigquery
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-RAW_DATASET = os.getenv("BQ_DATASET_RAW", "raw_weather")
+# Make the ingestion module importable
+sys.path.append(str(Path(__file__).resolve().parents[1] / "pipelines" / "ingestion"))
+from open_meteo_client import fetch_recent
 
 app = FastAPI(
     title="Malaysia Weather Forecast API",
     description="Multi-variable hourly weather forecasts for 5 Malaysian cities.",
-    version="2.0.0",
+    version="2.1.0",
 )
 
 MODELS_PATH = Path(os.getenv("MODELS_PATH", str(Path(__file__).resolve().parents[1] / "models")))
 STATIC_PATH = Path(__file__).resolve().parent / "static"
 CITIES = ["KL", "Kemaman", "Penang", "JB", "KK"]
 
-# variable_name -> BigQuery raw column name
+# variable_name -> raw column name (matches open_meteo_client output)
 VARIABLES = {
     "temperature": "temperature_2m",
     "precipitation": "precipitation",
@@ -57,22 +58,19 @@ def load_models():
 
 
 def fetch_recent_actuals(city: str, hours: int = 168) -> pd.DataFrame:
-    """Fetch recent actuals for all 4 variables from BigQuery."""
+    """
+    Fetch recent actuals directly from Open-Meteo (live, no BigQuery dependency).
+    Always fresh — no scheduled ingestion job required.
+    """
     try:
-        client = bigquery.Client(project=PROJECT_ID)
-        query = f"""
-            SELECT timestamp, temperature_2m, precipitation, humidity, windspeed_10m
-            FROM `{PROJECT_ID}.{RAW_DATASET}.hourly`
-            WHERE city = '{city}'
-            ORDER BY timestamp DESC
-            LIMIT {hours}
-        """
-        df = client.query(query).to_dataframe()
+        past_days = min(8, max(2, (hours // 24) + 2))
+        records = fetch_recent(city, past_days=past_days)
+        df = pd.DataFrame(records)
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         df = df.sort_values("timestamp").reset_index(drop=True)
         return df
     except Exception as e:
-        print(f"Warning: Could not fetch recent actuals for {city}: {e}")
+        print(f"Warning: Could not fetch recent actuals from Open-Meteo for {city}: {e}")
         return pd.DataFrame()
 
 
@@ -83,7 +81,8 @@ def compute_xgb_features(
 ) -> pd.DataFrame:
     """
     Compute XGBoost features for one target variable across future timestamps.
-    Uses real lag/rolling values from recent_df where available, NaN beyond the lag window.
+    Uses real lag/rolling values from recent_df (live Open-Meteo data) where
+    available, NaN beyond the lag window.
     """
     lag_windows = [1, 3, 6, 24, 168]
     rows = []
@@ -150,7 +149,6 @@ def predict_variable(
 
     final_pred = prophet_pred + xgb_correction
 
-    # Clip to physically valid ranges
     if variable_name == "precipitation":
         final_pred = np.clip(final_pred, 0, None)
     elif variable_name == "humidity":
@@ -162,7 +160,6 @@ def predict_variable(
 
 
 def get_condition(precipitation: float, humidity: float) -> tuple[str, str]:
-    """Derive a simple weather condition label from precipitation and humidity."""
     if precipitation > 1.0:
         return "Rainy", "🌧"
     elif precipitation > 0.1:
@@ -197,6 +194,7 @@ class HealthResponse(BaseModel):
     status: str
     cities_loaded: list[str]
     variables_loaded: list[str]
+    data_source: str
 
 
 # --- Endpoints ---
@@ -212,6 +210,7 @@ def health():
         "status": "ok",
         "cities_loaded": loaded_cities,
         "variables_loaded": list(VARIABLES.keys()),
+        "data_source": "open-meteo (live)",
     }
 
 
@@ -227,6 +226,7 @@ def predict(city: str = "KL", hours: int = 24):
     now = pd.Timestamp.now(tz="UTC").floor("h")
     future_timestamps = pd.date_range(start=now, periods=hours, freq="h", tz="UTC")
 
+    # Live fetch from Open-Meteo — always fresh, no scheduled job needed
     recent_df = fetch_recent_actuals(city, hours=168)
 
     results = {}

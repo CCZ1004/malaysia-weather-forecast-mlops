@@ -2,15 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements and install
 COPY api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy models and api code
 COPY models/ /app/models/
 COPY api/ /app/api/
+COPY pipelines/ingestion/ /app/pipelines/ingestion/
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080
