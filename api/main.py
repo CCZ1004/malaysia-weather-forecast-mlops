@@ -58,11 +58,13 @@ def load_models():
 
 
 def fetch_recent_actuals(city: str, hours: int = 168) -> pd.DataFrame:
+    """
+    Fetch recent actuals directly from Open-Meteo (live, no BigQuery dependency).
+    Always fetches 8 days to ensure all lag features (including 168h) are available.
+    """
     try:
-        past_days = min(8, max(2, (hours // 24) + 2))
-        records = fetch_recent(city, past_days=past_days)
+        records = fetch_recent(city, past_days=8)
         df = pd.DataFrame(records)
-        # Open-Meteo already returns timestamps in Asia/Kuala_Lumpur local time
         df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("Asia/Kuala_Lumpur")
         df = df.sort_values("timestamp").reset_index(drop=True)
         return df
@@ -224,7 +226,7 @@ def predict(city: str = "KL", hours: int = 24):
     now = pd.Timestamp.now(tz="Asia/Kuala_Lumpur").floor("h")
     future_timestamps = pd.date_range(start=now, periods=hours, freq="h", tz="Asia/Kuala_Lumpur")
 
-    recent_df = fetch_recent_actuals(city, hours=168)
+    recent_df = fetch_recent_actuals(city)
 
     results = {}
     for variable_name, target_col in VARIABLES.items():
